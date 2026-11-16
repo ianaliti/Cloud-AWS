@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+**/build/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+~/localemu-env/
+
+# Lambda build artifacts
+**/function.zip
+
+# LocalEmu / AWS
+.localemu/
+.aws/credentials
+infra/.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
