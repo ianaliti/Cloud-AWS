@@ -1,6 +1,6 @@
-# TP AWS Lambda – Architecture Serverless 100 % Locale
+# TP AWS Lambda 
 
-Implémentation complète du pipeline **HTTP → Lambda → SQS → Lambda → DynamoDB** à l'aide de **LocalEmu** (émulateur local AWS). Aucun compte AWS, aucune carte bancaire.
+Implémentation complète du pipeline **HTTP → Lambda → SQS → Lambda → DynamoDB** à l'aide de **LocalEmu** (émulateur local AWS). Aucun compte AWS, aucune carte bancaire. 
 
 ---
 
@@ -147,18 +147,6 @@ awsemu dynamodb scan --table-name tp-orders --region us-east-1 --output json
 | Vérification async | Lire DynamoDB **immédiatement** après le POST | L'enregistrement peut ne pas encore y être |
 
 ---
-
-## Questions d'analyse
-
-**Pourquoi ne pas écrire directement dans DynamoDB depuis Lambda A ?**  
-Lambda A est sur le chemin critique de la réponse HTTP : chaque milliseconde compte. Si DynamoDB est lent ou indisponible, l'appel HTTP échouerait. En passant par SQS, Lambda A délègue et répond immédiatement ; Lambda B peut réessayer en cas d'échec sans impacter l'utilisateur.
-
-**Quel est l'intérêt de SQS ?**  
-SQS découple producteur et consommateur en termes de débit, de disponibilité et de cycle de vie. Si Lambda B plante, le message reste dans la file (jusqu'au délai de rétention, 4 jours par défaut) et est retraité automatiquement. Sans SQS, un crash de Lambda B signifierait une perte de données.
-
-**Que se passe-t-il si un message est traité plusieurs fois ?**  
-SQS garantit une livraison *at-least-once* (au moins une fois), pas *exactly-once*. Lambda B utilise une `ConditionExpression` (`attribute_not_exists(id)`) pour ignorer silencieusement les doublons — c'est le mécanisme d'idempotence.
-
 **Différences avec Azure (TP 1) ?**
 
 | Azure | AWS équivalent |
@@ -168,8 +156,6 @@ SQS garantit une livraison *at-least-once* (au moins une fois), pas *exactly-onc
 | Azure Table Storage | Amazon DynamoDB |
 | Azure API Management / HTTP Trigger | Amazon API Gateway |
 | Azurite | LocalEmu |
-
-Les concepts sont quasi-identiques ; la terminologie et les SDKs diffèrent (Azure SDK vs boto3).
 
 ---
 
@@ -187,14 +173,64 @@ tp-aws-lambda/
 │   ├── build.sh            # Crée les ZIPs de déploiement
 │   ├── setup.sh            # Provisionne toutes les ressources dans LocalEmu
 │   ├── teardown.sh         # Supprime toutes les ressources
-│   └── test.sh             # Scénarios de validation bout-en-bout
+│   ├── test.sh             # Scénarios de validation bout-en-bout
+│   └── logs.sh             # Affiche les logs de Lambda B
+├── images/                 # Preuves d'exécution (screenshots)
 ├── .gitignore
 └── README.md
 ```
 
 ---
 
-## Limites identifiées
+## Preuves d'exécution
+
+### 1. LocalEmu répond en local — aucun compte AWS utilisé
+
+![get-caller-identity](images/Screenshot%202026-11-16%20at%2013.28.46.png)
+
+On lance `awsemu sts get-caller-identity` et on voit `"Account": "000000000000"`. Ce numéro de compte est faux — c'est LocalEmu qui répond, pas AWS. Ça prouve qu'on ne touche pas à un vrai compte AWS.
+
+---
+
+### 2. Toutes les ressources sont créées dans LocalEmu
+
+![setup.sh](images/Screenshot%202026-11-16%20at%2013.32.57.png)
+
+Le script `setup.sh` crée la file SQS, la table DynamoDB, les deux fonctions Lambda, l'API Gateway et l'URL HTTP. À la fin il affiche l'adresse pour envoyer des requêtes.
+
+---
+
+### 3. Les 4 scénarios de test passent
+
+![test.sh](images/Screenshot%202026-11-16%20at%2013.34.54.png)
+
+On voit les 4 tests :
+- Un payload valide → Lambda A répond avec un `id`
+- Lecture immédiate de DynamoDB → le record n'est pas encore là (preuve que le traitement est asynchrone)
+- 3 appels avec des données différentes → 3 messages envoyés dans SQS
+- Un payload sans le champ `name` → Lambda A retourne une erreur 400
+
+À la fin, DynamoDB contient bien 4 enregistrements.
+
+---
+
+### 4. Lambda B est déclenchée automatiquement par SQS
+
+![logs Lambda B](images/Screenshot%202026-11-16%20at%2013.39.05.png)
+
+Les logs de Lambda B montrent qu'elle a été appelée 4 fois automatiquement, une fois par message dans la file SQS. À chaque fois elle écrit dans DynamoDB. Lambda B n'a pas été appelée manuellement — c'est l'Event Source Mapping qui fait le déclenchement.
+
+---
+
+### 5. Les données sont bien enregistrées dans DynamoDB
+
+![dynamodb scan](images/Screenshot%202026-11-16%20at%2013.39.47.png)
+
+On voit les enregistrements dans DynamoDB : Alice, Order-1, Order-2, Order-3. Chaque item a un `id` unique, le `name`, les données d'origine, et deux timestamps — `received_at` (quand Lambda A a reçu la requête) et `processed_at` (quand Lambda B a écrit dans la base).
+
+---
+
+## Limites identifiées 
 
 - **Persistance LocalEmu** : par défaut, les ressources disparaissent à l'arrêt. Relancer `setup.sh` après chaque démarrage de LocalEmu.
 - **Python 3.14 / LocalEmu** : LocalEmu exige Python ≥ 3.10 ; les versions très récentes (3.14+) peuvent présenter des incompatibilités mineures.
